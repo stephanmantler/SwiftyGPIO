@@ -33,7 +33,7 @@ extension SwiftyGPIO {
     public static func UARTs(for board: SupportedBoard) -> [UARTInterface]? {
         switch board {
         case .CHIP:
-            return [SysFSUART("serial0")!]
+            return [SysFSUART(["serial0","ttyS0"])!]
         case .RaspberryPiRev1:
             fallthrough
         case .RaspberryPiRev2:
@@ -41,10 +41,10 @@ extension SwiftyGPIO {
         case .RaspberryPiPlusZero:
             fallthrough
         case .RaspberryPi2:
-            return [SysFSUART("serial0")!]
+            return [SysFSUART(["serial0","ttyAMA0"])!]
         case .RaspberryPi3:
-            return [SysFSUART("serial0")!,
-                    SysFSUART("serial1")!]
+            return [SysFSUART(["serial0","ttyAMA0"])!,
+                    SysFSUART(["serial1","ttyS0"])!]
         default:
             return nil
         }
@@ -54,9 +54,9 @@ extension SwiftyGPIO {
 // MARK: UART
 public protocol UARTInterface {
     func configureInterface(speed: UARTSpeed, bitsPerChar: CharSize, stopBits: StopBits, parity: ParityType)
-    func readString() -> String
-    func readLine() -> String
-    func readData() -> [CChar]
+    func readString() -> String?
+    func readLine() -> String?
+    func readData() -> [CChar]?
     func writeString(_ value: String)
     func writeData(_ values: [CChar])
 }
@@ -153,22 +153,28 @@ public final class SysFSUART: UARTInterface {
     var tty: termios
     var fd: Int32
 
-    public init?(_ uartId: String) {
-        device = "/dev/"+uartId
-        tty = termios()
+    public init?(_ uartIds: [String]) {
 
-        fd = open(device, O_RDWR | O_NOCTTY | O_SYNC | O_NONBLOCK)
-        guard fd>0 else {
-            perror("Couldn't open UART device")
-            abort()
+        for uartId in uartIds {
+            device = "/dev/"+uartId
+            tty = termios()
+
+            fd = open(device, O_RDWR | O_NOCTTY | O_SYNC)
+            guard fd>0 else {
+                continue
+            }
+
+            let ret = tcgetattr(fd, &tty)
+
+            guard ret == 0 else {
+                close(fd)
+                continue
+            }
+
+            return
         }
 
-        let ret = tcgetattr(fd, &tty)
-
-        guard ret == 0 else {
-            perror("Couldn't get terminal attributes")
-            abort()
-        }
+        return nil
     }
 
     public func configureInterface(speed: UARTSpeed, bitsPerChar: CharSize, stopBits: StopBits, parity: ParityType) {
@@ -191,7 +197,7 @@ public final class SysFSUART: UARTInterface {
         applyConfiguration()
     }
 
-    public func readLine() -> String {
+    public func readLine() -> String? {
         var buf = [CChar](repeating:0, count: 4097) //4096 chars at max in canonical mode
         var ptr = UnsafeMutablePointer<CChar>(&buf)
         var pos = 0
@@ -202,6 +208,10 @@ public final class SysFSUART: UARTInterface {
                 perror("Error while reading from UART")
                 abort()
             }
+
+            if n == 0 {
+                return nil
+            }
             ptr += 1
             pos += 1
         } while buf[pos-1] != CChar(UInt8(ascii: "\n"))
@@ -210,19 +220,25 @@ public final class SysFSUART: UARTInterface {
         return String(cString: &buf)
     }
 
-    public func readString() -> String {
+    public func readString() -> String? {
         var buf = readData()
-        buf.append(0) //Add terminator to convert cString correctly
-        return String(cString: &buf)
+        if buf == nil {
+            return nil
+        }
+        buf!.append(0) //Add terminator to convert cString correctly
+        return String(cString: &buf!)
     }
 
-    public func readData() -> [CChar] {
+    public func readData() -> [CChar]? {
         var buf = [CChar](repeating:0, count: 4096) //4096 chars at max in canonical mode
 
         let n = read(fd, &buf, buf.count * MemoryLayout<CChar>.stride)
         if n<0 {
             perror("Error while reading from UART")
             abort()
+        }
+        if n == 0 {
+            return nil
         }
         return Array(buf[0..<n])
     }
