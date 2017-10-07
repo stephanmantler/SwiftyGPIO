@@ -33,7 +33,7 @@ extension SwiftyGPIO {
     public static func UARTs(for board: SupportedBoard) -> [UARTInterface]? {
         switch board {
         case .CHIP:
-            return [SysFSUART(["serial0","ttyAMA0"])!]
+            return [SysFSUART(["serial0","ttyAMA0"])].flatMap { $0 }
         case .RaspberryPiRev1:
             fallthrough
         case .RaspberryPiRev2:
@@ -41,10 +41,10 @@ extension SwiftyGPIO {
         case .RaspberryPiPlusZero:
             fallthrough
         case .RaspberryPi2:
-            return [SysFSUART(["serial0","ttyAMA0"])!]
+            return [SysFSUART(["serial0","ttyAMA0"])].flatMap { $0 }
         case .RaspberryPi3:
-            return [SysFSUART(["serial0","ttyS0"])!,
-                    SysFSUART(["serial1","ttyAMA0"])!]
+            return [SysFSUART(["serial0","ttyS0"]),
+                    SysFSUART(["serial1","ttyAMA0"])!].flatMap { $0 }
         default:
             return nil
         }
