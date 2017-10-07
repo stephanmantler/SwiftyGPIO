@@ -33,7 +33,7 @@ extension SwiftyGPIO {
     public static func UARTs(for board: SupportedBoard) -> [UARTInterface]? {
         switch board {
         case .CHIP:
-            return [SysFSUART(["serial0","ttyS0"])!]
+            return [SysFSUART(["serial0","ttyAMA0"])!]
         case .RaspberryPiRev1:
             fallthrough
         case .RaspberryPiRev2:
@@ -43,8 +43,8 @@ extension SwiftyGPIO {
         case .RaspberryPi2:
             return [SysFSUART(["serial0","ttyAMA0"])!]
         case .RaspberryPi3:
-            return [SysFSUART(["serial0","ttyAMA0"])!,
-                    SysFSUART(["serial1","ttyS0"])!]
+            return [SysFSUART(["serial0","ttyS0"])!,
+                    SysFSUART(["serial1","ttyAMA0"])!]
         default:
             return nil
         }
@@ -153,28 +153,39 @@ public final class SysFSUART: UARTInterface {
     var tty: termios
     var fd: Int32
 
-    public init?(_ uartIds: [String]) {
+    public init?(_ uartIdList: [String]) {
+        // try all items in list until one works
+        for uartId in uartIdList {
 
-        for uartId in uartIds {
             device = "/dev/"+uartId
             tty = termios()
 
             fd = open(device, O_RDWR | O_NOCTTY | O_SYNC)
             guard fd>0 else {
+                if errno == ENOENT {
+                    // silently return nil if no such device
+                    continue
+                }
+                perror("Couldn't open UART device")
                 continue
             }
 
             let ret = tcgetattr(fd, &tty)
 
             guard ret == 0 else {
-                close(fd)
+	        close(fd)
+                perror("Couldn't get terminal attributes")
                 continue
             }
 
             return
-        }
+	}
 
         return nil
+    }
+
+    public convenience init?(_ uartId: String) {
+        self.init([uartId])
     }
 
     public func configureInterface(speed: UARTSpeed, bitsPerChar: CharSize, stopBits: StopBits, parity: ParityType) {
