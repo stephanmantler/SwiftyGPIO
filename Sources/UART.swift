@@ -44,7 +44,7 @@ extension SwiftyGPIO {
             return [SysFSUART(["serial0","ttyAMA0"])].flatMap { $0 }
         case .RaspberryPi3:
             return [SysFSUART(["serial0","ttyS0"]),
-                    SysFSUART(["serial1","ttyAMA0"])!].flatMap { $0 }
+                    SysFSUART(["serial1","ttyAMA0"])].flatMap { $0 }
         default:
             return nil
         }
