@@ -272,6 +272,13 @@ public final class SysFSUART: UARTInterface {
         return buf[0]
     }
 
+    public func write(byte value: CChar) {
+        var value = value
+
+        _ = Glibc.write(fd, &value, 1)
+        tcdrain(fd)
+    }
+    
     public func write(string value: String) {
         let chars = Array(value.utf8CString)
 
@@ -284,7 +291,7 @@ public final class SysFSUART: UARTInterface {
         _ = Glibc.write(fd, &value, value.count)
         tcdrain(fd)
     }
-    
+
     public func write(data value:Data) {
         value.withUnsafeBytes {(bytes: UnsafePointer<CChar>)->Void in
             _ = Glibc.write(fd, bytes, value.count)
