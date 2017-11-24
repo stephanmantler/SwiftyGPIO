@@ -272,13 +272,13 @@ public final class SysFSUART: UARTInterface {
         return buf[0]
     }
 
-    public func write(byte value: CChar) {
+    public func write(byte value: UInt8) {
         var value = value
 
         _ = Glibc.write(fd, &value, 1)
         tcdrain(fd)
     }
-    
+
     public func write(string value: String) {
         let chars = Array(value.utf8CString)
 
