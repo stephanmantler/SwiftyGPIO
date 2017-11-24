@@ -28,6 +28,8 @@
     import Darwin.C
 #endif
 
+import Foundation
+
 extension SwiftyGPIO {
 
     public static func UARTs(for board: SupportedBoard) -> [UARTInterface]? {
@@ -56,9 +58,11 @@ public protocol UARTInterface {
     func configureInterface(speed: UARTSpeed, bitsPerChar: CharSize, stopBits: StopBits, parity: ParityType)
     func readString() -> String?
     func readLine() -> String?
-    func readData() -> [CChar]?
-    func writeString(_ value: String)
-    func writeData(_ values: [CChar])
+    func readChars() -> [CChar]?
+    func readByte() -> UInt8?
+    func write(string value: String)
+    func write(chars values: [CChar])
+    func write(data values: Data)
 }
 
 public enum ParityType {
@@ -232,7 +236,7 @@ public final class SysFSUART: UARTInterface {
     }
 
     public func readString() -> String? {
-        var buf = readData()
+        var buf = readChars()
         if buf == nil {
             return nil
         }
@@ -240,7 +244,7 @@ public final class SysFSUART: UARTInterface {
         return String(cString: &buf!)
     }
 
-    public func readData() -> [CChar]? {
+    public func readChars() -> [CChar]? {
         var buf = [CChar](repeating:0, count: 4096) //4096 chars at max in canonical mode
 
         let n = read(fd, &buf, buf.count * MemoryLayout<CChar>.stride)
@@ -254,17 +258,38 @@ public final class SysFSUART: UARTInterface {
         return Array(buf[0..<n])
     }
 
-    public func writeString(_ value: String) {
-        let chars = Array(value.utf8CString)
+    public func readByte() -> UInt8? {
+        var buf = [UInt8](repeating:0, count:1)
 
-        writeData(chars)
+        let n = read(fd, &buf, 1)
+        if n<0 {
+            perror("Error while reading from UART")
+            abort()
+        }
+        if n == 0 {
+            return nil
+        }
+        return buf[0]
     }
 
-    public func writeData(_ value: [CChar]) {
+    public func write(string value: String) {
+        let chars = Array(value.utf8CString)
+
+        write(chars:chars)
+    }
+
+    public func write(chars value: [CChar]) {
         var value = value
 
-        _ = write(fd, &value, value.count)
+        _ = Glibc.write(fd, &value, value.count)
         tcdrain(fd)
+    }
+    
+    public func write(data value:Data) {
+        value.withUnsafeBytes {(bytes: UnsafePointer<CChar>)->Void in
+            _ = Glibc.write(fd, bytes, value.count)
+            tcdrain(fd)
+        }
     }
 
     private func applyConfiguration() {
