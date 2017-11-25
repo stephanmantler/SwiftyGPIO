@@ -60,9 +60,10 @@ public protocol UARTInterface {
     func readLine() -> String?
     func readChars() -> [CChar]?
     func readByte() -> UInt8?
-    func write(string value: String)
-    func write(chars values: [CChar])
-    func write(data values: Data)
+    func writeByte(_ value: UInt8)
+    func writeString(_ value: String)
+    func writeChars(_ values: [CChar])
+    func writeData(_ values: Data)
 }
 
 public enum ParityType {
@@ -272,29 +273,29 @@ public final class SysFSUART: UARTInterface {
         return buf[0]
     }
 
-    public func write(byte value: UInt8) {
+    public func writeByte(_ value: UInt8) {
         var value = value
 
-        _ = Glibc.write(fd, &value, 1)
+        _ = write(fd, &value, 1)
         tcdrain(fd)
     }
 
-    public func write(string value: String) {
+    public func writeString(_ value: String) {
         let chars = Array(value.utf8CString)
 
-        write(chars:chars)
+        writeChars(chars)
     }
 
-    public func write(chars value: [CChar]) {
+    public func writeChars(_ value: [CChar]) {
         var value = value
 
-        _ = Glibc.write(fd, &value, value.count)
+        _ = write(fd, &value, value.count)
         tcdrain(fd)
     }
 
-    public func write(data value:Data) {
+    public func writeData(_ value:Data) {
         value.withUnsafeBytes {(bytes: UnsafePointer<CChar>)->Void in
-            _ = Glibc.write(fd, bytes, value.count)
+            _ = write(fd, bytes, value.count)
             tcdrain(fd)
         }
     }
