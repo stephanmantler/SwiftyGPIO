@@ -174,11 +174,17 @@ public struct MailBox {
         filename = "/tmp/swifty-mailbox-" + String(getpid())
         unlink(filename)
 
-        //makedev is a macro not imported by Swift that resolves to gnu_dev_makedev
-        if mknod(filename, S_IFCHR|0600, gnu_dev_makedev(100, 0)) < 0 {
+      #if arch(arm) 
+        if mknod(filename, S_IFCHR|0600, swift_makedev(100, 0)) < 0 {
             perror("Failed to create mailbox device\n")
             return -1
         }
+      #elseif os(Linux) 
+        if mknod(filename, S_IFCHR|0600, UInt(swift_makedev(100, 0))) < 0 {
+            perror("Failed to create mailbox device\n")
+            return -1
+        }
+      #endif
 
         file_desc = open(filename, 0)
         if file_desc < 0 {
@@ -334,11 +340,17 @@ public struct MailBox {
     }
 }
 
-// MARK: - Darwin / Xcode Support
-#if os(OSX)
-    private var O_SYNC: CInt { fatalError("Linux only") }
+// Swift implementation of gnu_dev_makedev, that right now is not imported by Swift on systems with recent libc (bits/sysmacros.h)
+func swift_makedev(_ major: UInt, _ minor: UInt) -> UInt64 {
+    var dev: UInt64 = 0
+    dev  = (UInt64(major) & 0x00000fff) <<  8
+    dev |= (UInt64(major) & 0xfffff000) << 32
+    dev |= (UInt64(minor) & 0x000000ff)
+    dev |= (UInt64(minor) & 0xffffff00) << 12
+    return dev
+}
 
-    func gnu_dev_makedev(_ maj: UInt, _ min: UInt) -> Int32 {
-        fatalError("Linux only")
-    }
+// MARK: - Darwin / Xcode Support
+#if os(OSX) || os(iOS)
+    private var O_SYNC: CInt { fatalError("Linux only") }
 #endif

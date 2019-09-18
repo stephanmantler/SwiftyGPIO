@@ -35,14 +35,16 @@ internal let GPIOBASEPATH="/sys/class/gpio/"
 // MARK: GPIO
 
 public class GPIO {
-    var name: String = ""
-    var id: Int = 0
+    public var bounceTime: TimeInterval?
+
+    public private(set) var name: String = ""
+    public private(set) var id: Int = 0
     var exported = false
     var listening = false
     var intThread: Thread?
-    var intFuncFalling: ((GPIO) -> Void)?
-    var intFuncRaising: ((GPIO) -> Void)?
-    var intFuncChange: ((GPIO) -> Void)?
+    var intFalling: (func: ((GPIO) -> Void), lastCall: Date?)?
+    var intRaising: (func: ((GPIO) -> Void), lastCall: Date?)?
+    var intChange: (func: ((GPIO) -> Void), lastCall: Date?)?
 
     public init(name: String,
                 id: Int) {
@@ -83,6 +85,15 @@ public class GPIO {
         }
     }
 
+    public var pull: GPIOPull {
+        set(dir) {
+            fatalError("Unsupported parameter.")
+        }
+        get{
+            fatalError("Parameter cannot be read.")
+        }
+    }
+
     public var value: Int {
         set(val) {
             if !exported {enableIO(id)}
@@ -99,7 +110,7 @@ public class GPIO {
     }
 
     public func onFalling(_ closure: @escaping (GPIO) -> Void) {
-        intFuncFalling = closure
+        intFalling = (func: closure, lastCall: nil)
         if intThread == nil {
             intThread = makeInterruptThread()
             listening = true
@@ -108,7 +119,7 @@ public class GPIO {
     }
 
     public func onRaising(_ closure: @escaping (GPIO) -> Void) {
-        intFuncRaising = closure
+        intRaising = (func: closure, lastCall: nil)
         if intThread == nil {
             intThread = makeInterruptThread()
             listening = true
@@ -117,7 +128,7 @@ public class GPIO {
     }
 
     public func onChange(_ closure: @escaping (GPIO) -> Void) {
-        intFuncChange = closure
+        intChange = (func: closure, lastCall: nil)
         if intThread == nil {
             intThread = makeInterruptThread()
             listening = true
@@ -126,7 +137,7 @@ public class GPIO {
     }
 
     public func clearListeners() {
-        (intFuncFalling, intFuncRaising, intFuncChange) = (nil, nil, nil)
+        (intFalling, intRaising, intChange) = (nil, nil, nil)
         listening = false
     }
 
@@ -161,8 +172,13 @@ fileprivate extension GPIO {
     func writeToFile(_ path: String, value: String) {
         let fp = fopen(path, "w")
         if fp != nil {
-            let ret = fwrite(value, MemoryLayout<CChar>.stride, value.characters.count, fp)
-            if ret<value.characters.count {
+          #if swift(>=3.2)
+            let len = value.count
+          #else
+            let len = value.characters.count
+          #endif
+            let ret = fwrite(value, MemoryLayout<CChar>.stride, len, fp)
+            if ret<len {
                 if ferror(fp) != 0 {
                     perror("Error while writing to file")
                     abort()
@@ -190,7 +206,11 @@ fileprivate extension GPIO {
             //Remove the trailing \n
             buf[len-1]=0
             res = String.init(validatingUTF8: buf)
+        #if swift(>=4.1)
+            buf.deallocate()
+        #else
             buf.deallocate(capacity: MAXLEN)
+        #endif
         }
         return res
     }
@@ -209,8 +229,12 @@ fileprivate extension GPIO {
             var buf: [Int8] = [0, 0, 0] //Dummy read to discard current value
             read(fp, &buf, 3)
 
+          #if swift(>=4.0)
+            var pfd = pollfd(fd:fp, events:Int16(truncatingIfNeeded:POLLPRI), revents:0)
+          #else
             var pfd = pollfd(fd:fp, events:Int16(truncatingBitPattern:POLLPRI), revents:0)
-
+          #endif
+          
             while self.listening {
                 let ready = poll(&pfd, 1, -1)
                 if ready > -1 {
@@ -221,17 +245,34 @@ fileprivate extension GPIO {
                     let res = String(validatingUTF8: buf)!
                     switch res {
                     case "0":
-                        self.intFuncFalling?(self)
+                        self.interrupt(type: &(self.intFalling))
                     case "1":
-                        self.intFuncRaising?(self)
+                        self.interrupt(type: &(self.intRaising))
                     default:
                         break
                     }
-                    self.intFuncChange?(self)
+                    self.interrupt(type: &(self.intChange))
                 }
             }
         }
         return thread
+    }
+
+    func interrupt(type: inout (func: ((GPIO) -> Void), lastCall: Date?)?) {
+        guard let itype = type else {
+            return
+        }
+        if let interval = self.bounceTime, let lastCall = itype.lastCall, Date().timeIntervalSince(lastCall) < interval {
+            return
+        }
+        itype.func(self)
+        type?.lastCall = Date()
+    }
+}
+
+extension GPIO: CustomStringConvertible {
+    public var description: String {
+        return "\(name)<\(direction),\(edge),\(activeLow)>: \(value)"
     }
 }
 
@@ -239,20 +280,20 @@ fileprivate extension GPIO {
 
 public final class RaspberryGPIO: GPIO {
 
-    var setGetId: UInt = 0
+    var setGetId: UInt32 = 0
     var baseAddr: Int = 0
     var inited = false
 
     let BCM2708_PERI_BASE: Int
     let GPIO_BASE: Int
 
-    var gpioBasePointer: UnsafeMutablePointer<UInt>!
-    var gpioGetPointer: UnsafeMutablePointer<UInt>!
-    var gpioSetPointer: UnsafeMutablePointer<UInt>!
-    var gpioClearPointer: UnsafeMutablePointer<UInt>!
+    var gpioBasePointer: UnsafeMutablePointer<UInt32>!
+    var gpioGetPointer: UnsafeMutablePointer<UInt32>!
+    var gpioSetPointer: UnsafeMutablePointer<UInt32>!
+    var gpioClearPointer: UnsafeMutablePointer<UInt32>!
 
     public init(name: String, id: Int, baseAddr: Int) {
-        self.setGetId = UInt(1<<id)
+        self.setGetId = UInt32(1<<id)
         self.BCM2708_PERI_BASE = baseAddr
         self.GPIO_BASE = BCM2708_PERI_BASE + 0x200000 /* GPIO controller */
         super.init(name:name, id:id)
@@ -281,6 +322,16 @@ public final class RaspberryGPIO: GPIO {
         get {
             if !inited {initIO()}
             return gpioGetDirection()
+        }
+    }
+
+    public override var pull: GPIOPull {
+        set(pull) {
+            if !exported {enableIO(id)}
+            setGpioPull(pull)
+        }
+        get{
+            fatalError("Parameter cannot be read.")
         }
     }
 
@@ -317,7 +368,7 @@ public final class RaspberryGPIO: GPIO {
             perror("mmap error")
             abort()
         }
-        gpioBasePointer = gpio_map.assumingMemoryBound(to: UInt.self)
+        gpioBasePointer = gpio_map.assumingMemoryBound(to: UInt32.self)
 
         gpioGetPointer = gpioBasePointer.advanced(by: 13)   // GPLEV0
         gpioSetPointer = gpioBasePointer.advanced(by: 7)    // GPSET0
@@ -328,19 +379,32 @@ public final class RaspberryGPIO: GPIO {
 
     private func gpioAsInput() {
         let ptr = gpioBasePointer.advanced(by: id/10)       // GPFSELn 0..5
-        ptr.pointee &= ~(7<<((UInt(id)%10)*3))                    // SEL=000 input
+        ptr.pointee &= ~(7<<((UInt32(id)%10)*3))                    // SEL=000 input
     }
 
     private func gpioAsOutput() {
         let ptr = gpioBasePointer.advanced(by: id/10)       // GPFSELn 0..5
-        ptr.pointee &= ~(7<<((UInt(id)%10)*3))
-        ptr.pointee |=  (1<<((UInt(id)%10)*3))                    // SEL=001 output
+        ptr.pointee &= ~(7<<((UInt32(id)%10)*3))
+        ptr.pointee |=  (1<<((UInt32(id)%10)*3))                    // SEL=001 output
     }
 
     private func gpioGetDirection() -> GPIODirection {
         let ptr = gpioBasePointer.advanced(by: id/10)       // GPFSELn 0..5
-        let d = (ptr.pointee & (7<<((UInt(id)%10)*3)))
+        let d = (ptr.pointee & (7<<((UInt32(id)%10)*3)))
         return (d == 0) ? .IN : .OUT
+    }
+
+    func setGpioPull(_ value: GPIOPull){
+        let gpioGPPUDPointer = gpioBasePointer.advanced(by: 37)
+        gpioGPPUDPointer.pointee = value.rawValue   // Configure GPPUD
+        usleep(10);                                 // 150 cycles or more
+        let gpioGPPUDCLK0Pointer = gpioBasePointer.advanced(by: 38)
+        gpioGPPUDCLK0Pointer.pointee = setGetId     // Configure GPPUDCLK0 for specific gpio (Ids always lower than 31, no GPPUDCLK1 needed)
+        usleep(10);                                 // 150 cycles or more
+        gpioGPPUDPointer.pointee = 0                // Reset GPPUD
+        usleep(10);                                 // 150 cycles or more
+        gpioGPPUDCLK0Pointer.pointee = 0            // Reset GPPUDCLK0/1 for specific gpio
+        usleep(10);                                 // 150 cycles or more
     }
 
     private func gpioGet() -> Int {
@@ -382,7 +446,7 @@ public struct SwiftyGPIO {
 
 // MARK: - Global Enums
 
-public enum SupportedBoard {
+public enum SupportedBoard: String {
     case RaspberryPiRev1   // Pi A,B Revision 1
     case RaspberryPiRev2   // Pi A,B Revision 2
     case RaspberryPiPlusZero // Pi A+,B+,Zero with 40 pin header
@@ -394,7 +458,7 @@ public enum SupportedBoard {
     case OrangePiZero
 }
 
-public enum GPIOName {
+public enum GPIOName: String {
     case P0
     case P1
     case P2
@@ -457,16 +521,36 @@ public enum GPIOEdge: String {
     case BOTH="both"
 }
 
+public enum GPIOPull: UInt32 {
+    case neither = 0
+    case down    = 1
+    case up      = 2
+}
+
 public enum ByteOrder {
     case MSBFIRST
     case LSBFIRST
 }
+
+// MARK: - Codable
+
+#if swift(>=4.0)
+extension SupportedBoard: Codable { }
+
+extension GPIOName: Codable { }
+
+extension GPIODirection: Codable { }
+
+extension GPIOEdge: Codable { }
+
+extension GPIOPull: Codable { }
+#endif
 
 // MARK: - Constants
 
 let PAGE_SIZE = (1 << 12)
 
 // MARK: - Darwin / Xcode Support
-#if os(OSX)
+#if os(OSX) || os(iOS)
     private var O_SYNC: CInt { fatalError("Linux only") }
 #endif

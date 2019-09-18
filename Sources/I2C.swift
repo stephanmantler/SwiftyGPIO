@@ -77,11 +77,13 @@ public protocol I2CInterface {
     func readByte(_ address: Int, command: UInt8) -> UInt8
     func readWord(_ address: Int, command: UInt8) -> UInt16
     func readData(_ address: Int, command: UInt8) -> [UInt8]
+    func readI2CData(_ address: Int, command: UInt8) -> [UInt8]
     func writeQuick(_ address: Int)
     func writeByte(_ address: Int, value: UInt8)
     func writeByte(_ address: Int, command: UInt8, value: UInt8)
     func writeWord(_ address: Int, command: UInt8, value: UInt16)
     func writeData(_ address: Int, command: UInt8, values: [UInt8])
+    func writeI2CData(_ address: Int, command: UInt8, values: [UInt8])
     // One-shot rd/wr not provided
 }
 
@@ -111,7 +113,11 @@ public final class SysFSI2C: I2CInterface {
             perror("I2C read failed")
             abort()
         }
+      #if swift(>=4.0)
+        return UInt8(truncatingIfNeeded: r)
+      #else
         return UInt8(truncatingBitPattern: r)
+      #endif
     }
 
     public func readByte(_ address: Int, command: UInt8) -> UInt8 {
@@ -123,7 +129,11 @@ public final class SysFSI2C: I2CInterface {
             perror("I2C read failed")
             abort()
         }
+      #if swift(>=4.0)
+        return UInt8(truncatingIfNeeded: r)
+      #else
         return UInt8(truncatingBitPattern: r)
+      #endif
     }
 
     public func readWord(_ address: Int, command: UInt8) -> UInt16 {
@@ -135,7 +145,11 @@ public final class SysFSI2C: I2CInterface {
             perror("I2C read failed")
             abort()
         }
+      #if swift(>=4.0)
+        return UInt16(truncatingIfNeeded: r)
+      #else
         return UInt16(truncatingBitPattern: r)
+      #endif
     }
 
     public func readData(_ address: Int, command: UInt8) -> [UInt8] {
@@ -152,6 +166,20 @@ public final class SysFSI2C: I2CInterface {
         return buf
     }
 
+    public func readI2CData(_ address: Int, command: UInt8) -> [UInt8] {
+        var buf: [UInt8] = [UInt8](repeating:0, count: 32)
+
+        setSlaveAddress(address)
+
+        let r =  i2c_smbus_read_i2c_block_data(command: command, values: &buf)
+
+        if r < 0 {
+            perror("I2C read failed")
+            abort()
+        }
+        return buf
+    }
+ 
     public func writeQuick(_ address: Int) {
         setSlaveAddress(address)
 
@@ -207,10 +235,37 @@ public final class SysFSI2C: I2CInterface {
         }
     }
 
+    public func writeI2CData(_ address: Int, command: UInt8, values: [UInt8]) {
+        setSlaveAddress(address)
+
+        let r =  i2c_smbus_write_i2c_block_data(command: command, values: values)
+
+        if r < 0 {
+            perror("I2C write failed")
+            abort()
+        }
+    }
+ 
     public func isReachable(_ address: Int) -> Bool {
         setSlaveAddress(address)
 
-        let r =  i2c_smbus_read_byte()
+        var r: Int32 =  -1
+        
+        // Mimic the behaviour of i2cdetect, performing bogus read/quickwrite depending on the address
+        switch(address){
+            case 0x3...0x2f:
+                r =  i2c_smbus_write_quick(value: 0)
+            case 0x30...0x37:
+                r =  i2c_smbus_read_byte()
+            case 0x38...0x4f:
+                r = i2c_smbus_write_quick(value: 0)
+            case 0x50...0x5f:
+                r =  i2c_smbus_read_byte()
+            case 0x60...0x77:
+                r =  i2c_smbus_write_quick(value: 0)
+            default:
+                r =  i2c_smbus_read_byte()
+        }
 
         guard r >= 0 else { return false }
 
@@ -248,7 +303,7 @@ public final class SysFSI2C: I2CInterface {
     private func openI2C() {
         let fd = open(I2CBASEPATH+String(i2cId), O_RDWR)
         guard fd > 0 else {
-            fatalError("Couldn't open the I2C device")
+            fatalError("Couldn't open the I2C device") 
         }
 
         self.fd = fd
@@ -285,7 +340,7 @@ public final class SysFSI2C: I2CInterface {
     //
 
     private func i2c_smbus_read_byte() -> Int32 {
-        var data = [UInt8](repeating:0, count: I2C_MAX_LENGTH+1)
+        var data = [UInt8](repeating:0, count: I2C_DEFAULT_PAYLOAD_LENGTH)
 
         let r = smbus_ioctl(rw: I2C_SMBUS_READ,
                             command: 0,
@@ -299,7 +354,7 @@ public final class SysFSI2C: I2CInterface {
     }
 
     private func i2c_smbus_read_byte_data(command: UInt8) -> Int32 {
-        var data = [UInt8](repeating:0, count: I2C_MAX_LENGTH+1)
+        var data = [UInt8](repeating:0, count: I2C_DEFAULT_PAYLOAD_LENGTH)
 
         let r = smbus_ioctl(rw: I2C_SMBUS_READ,
                             command: command,
@@ -313,29 +368,29 @@ public final class SysFSI2C: I2CInterface {
     }
 
     private func i2c_smbus_read_word_data(command: UInt8) -> Int32 {
-        var data = [UInt8](repeating:0, count: I2C_MAX_LENGTH+1)
+        var data = [UInt8](repeating:0, count: I2C_DEFAULT_PAYLOAD_LENGTH)
 
         let r = smbus_ioctl(rw: I2C_SMBUS_READ,
                             command: command,
                             size: I2C_SMBUS_WORD_DATA,
                             data: &data)
         if r >= 0 {
-            return Int32(data[1] << 8) + Int32(data[0] >> 8)
+            return (Int32(data[1]) << 8) + Int32(data[0])
         } else {
             return -1
         }
     }
 
     private func i2c_smbus_read_block_data(command: UInt8, values: inout [UInt8]) -> Int32 {
-        var data = [UInt8](repeating:0, count: I2C_MAX_LENGTH+1)
+        var data = [UInt8](repeating:0, count: I2C_DEFAULT_PAYLOAD_LENGTH)
 
         let r = smbus_ioctl(rw: I2C_SMBUS_READ,
                             command: command,
-                            size: I2C_SMBUS_WORD_DATA,
+                            size: I2C_SMBUS_BLOCK_DATA,
                             data: &data)
         if r >= 0 {
             for i in 0..<Int(data[0]) {
-                values[i-1] = data[i+1]
+                values[i] = data[i+1]
             }
             return Int32(data[0])
         } else {
@@ -343,6 +398,24 @@ public final class SysFSI2C: I2CInterface {
         }
     }
 
+    private func i2c_smbus_read_i2c_block_data(command: UInt8, values: inout [UInt8]) -> Int32 {
+        var data = [UInt8](repeating:0, count: I2C_DEFAULT_PAYLOAD_LENGTH)
+
+        let r = smbus_ioctl(rw: I2C_SMBUS_READ,
+                            command: command,
+                            size: I2C_SMBUS_I2C_BLOCK_DATA,
+                            data: &data)
+        if r >= 0 {
+            for i in 0..<Int(data[0]) {
+                values[i] = data[i+1]
+            }
+            return Int32(data[0])
+        } else {
+            return -1
+        }
+    }
+
+ 
     //
     // Write
     //
@@ -362,7 +435,7 @@ public final class SysFSI2C: I2CInterface {
     }
 
     private func i2c_smbus_write_byte_data(command: UInt8, value: UInt8) -> Int32 {
-        var data = [UInt8](repeating:0, count: I2C_MAX_LENGTH+1)
+        var data = [UInt8](repeating:0, count: I2C_DEFAULT_PAYLOAD_LENGTH)
 
         data[0] = value
 
@@ -373,7 +446,7 @@ public final class SysFSI2C: I2CInterface {
     }
 
     private func i2c_smbus_write_word_data(command: UInt8, value: UInt16) -> Int32 {
-        var data = [UInt8](repeating:0, count: I2C_MAX_LENGTH+1)
+        var data = [UInt8](repeating:0, count: I2C_DEFAULT_PAYLOAD_LENGTH)
 
         data[0] = UInt8(value & 0xFF)
         data[1] = UInt8(value >> 8)
@@ -385,9 +458,12 @@ public final class SysFSI2C: I2CInterface {
     }
 
     private func i2c_smbus_write_block_data(command: UInt8, values: [UInt8]) -> Int32 {
-        var data = [UInt8](repeating:0, count: I2C_MAX_LENGTH+1)
 
-        for i in 1..<values.count {
+        guard values.count<=I2C_DEFAULT_PAYLOAD_LENGTH else { fatalError("Invalid data length, can't send more than \(I2C_DEFAULT_PAYLOAD_LENGTH) bytes!") }
+        
+        var data = [UInt8](repeating:0, count: values.count+1)
+
+        for i in 1...values.count {
             data[i] = values[i-1]
         }
         data[0] = UInt8(values.count)
@@ -398,6 +474,23 @@ public final class SysFSI2C: I2CInterface {
                            data: &data)
     }
 
+    private func i2c_smbus_write_i2c_block_data(command: UInt8, values: [UInt8]) -> Int32 {
+
+        guard values.count<=I2C_DEFAULT_PAYLOAD_LENGTH else { fatalError("Invalid data length, can't send more than \(I2C_DEFAULT_PAYLOAD_LENGTH) bytes!") }
+        
+        var data = [UInt8](repeating:0, count: values.count+1)
+
+        for i in 1...values.count {
+            data[i] = values[i-1]
+        }
+        data[0] = UInt8(values.count)
+
+        return smbus_ioctl(rw: I2C_SMBUS_WRITE,
+                           command: command,
+                           size: I2C_SMBUS_I2C_BLOCK_DATA,
+                           data: &data)
+    }
+ 
 }
 
 // MARK: - I2C/SMBUS Constants
@@ -409,16 +502,19 @@ internal let I2C_SMBUS_BYTE: Int32 = 1
 internal let I2C_SMBUS_BYTE_DATA: Int32 = 2
 internal let I2C_SMBUS_WORD_DATA: Int32 = 3
 internal let I2C_SMBUS_BLOCK_DATA: Int32 = 5
+//Not implemented: I2C_SMBUS_I2C_BLOCK_BROKEN  6
+//Not implemented:  I2C_SMBUS_BLOCK_PROC_CALL   7
+internal let I2C_SMBUS_I2C_BLOCK_DATA: Int32 = 8
 
 internal let I2C_SLAVE: UInt = 0x703
 internal let I2C_SLAVE_FORCE: UInt = 0x706
 internal let I2C_RDWR: UInt = 0x707
 internal let I2C_PEC: UInt = 0x708
 internal let I2C_SMBUS: UInt = 0x720
-internal let I2C_MAX_LENGTH: Int = 32
+internal let I2C_DEFAULT_PAYLOAD_LENGTH: Int = 32
 internal let I2CBASEPATH="/dev/i2c-"
 
 // MARK: - Darwin / Xcode Support
-#if os(OSX)
+#if os(OSX) || os(iOS)
     private var O_SYNC: CInt { fatalError("Linux only") }
 #endif

@@ -2,13 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "BasicGPIO",
+    name: "OneWire",
     dependencies: [
         .package(url: "https://github.com/uraimo/SwiftyGPIO.git", from: "1.0.0"),
     ],
     targets: [
         .target(
-            name: "BasicGPIO",
-            dependencies: ["SwiftyGPIO"])
+            name: "OneWire",
+            dependencies: ["SwiftyGPIO"]
+            )
     ]
 )
